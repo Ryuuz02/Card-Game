@@ -1,12 +1,11 @@
 from random import shuffle, random
 
 class card:
-    def __init__(self, id, name, cost=0, damage=0, armor=0):
+    def __init__(self, id, name, cost=0, effects=None):
         self.id = id
         self.name = name
         self.cost = cost
-        self.damage = damage
-        self.armor = armor
+        self.effects = effects if effects is not None else []
 
     def __eq__(self, value):
         if isinstance(value, card):
@@ -15,6 +14,33 @@ class card:
 
     def __str__(self):
         return self.name
+    
+    def add_effect(self, effect):
+        self.effects.append(effect)
+    
+    def play(self):
+        for effect in self.effects:
+            effect.apply()
+
+class effect:
+    def __init__(self, user, target, effect_type, value):
+        self.user = user
+        self.target = target
+        self.effect_type = effect_type
+        self.value = value
+    
+    def apply(self):
+        if self.effect_type == "damage":
+            damage = max(0, self.value - self.target.armor)
+            self.target.health -= damage
+        elif self.effect_type == "armor":
+            self.target.armor += self.value
+        elif self.effect_type == "heal":
+            self.target.health += self.value
+        
+    def __str__(self):
+        return f"{self.effect_type} {self.value} to {self.target.name}"
+
 
 class player:
     def __init__(self, name, game, health=100, armor=0, max_hand_size=5, max_energy=3):
@@ -51,23 +77,39 @@ class player:
     
     def play_card(self, card):
         if card in self.hand:
-            if self.energy >= card.cost:
-                self.energy -= card.cost
-                self.game.add_event(self, self.game.enemy, damage=card.damage, armor=card.armor)
-                self.hand.remove(card)
-                self.discard_pile.append(card)
-            else:
-                print(f"{self.name} does not have enough energy to play this card.")
+            self.hand.remove(card)
+            self.energy -= card.cost
+            card.play()
+            print(f"{self.name} played {card}.")
         else:
-            print(f"{self.name} does not have this card in hand.")
-    
-    def end_turn(self):
-        self.discard_hand()
+            print(f"{self.name} does not have {card} in hand.")
     
     def start_turn(self):
         self.energy = self.max_energy
         print(f"{self.name} started their turn with {self.energy} energy.")
         self.draw_to_max_hand()
+        self.take_turn()
+
+    def take_turn(self):
+        while True:
+            print("Current Hand:")
+            for i in range(len(self.hand)):
+                card = self.hand[i]
+                print(str(i + 1) + ": " + str(card))
+            choice = int(input("Type the number of the card you want to play, or 0 to end the turn ")) - 1
+            if choice == -1:
+                break
+            chosen_card = self.hand[choice]
+            if chosen_card.cost > self.energy:
+                print(f"{self.name} does not have enough energy to play this card.")
+                continue
+            else:
+                self.play_card(chosen_card)
+                print(f"{self.name} played {chosen_card}.")
+        self.end_turn
+
+    def end_turn(self):
+        self.discard_hand()
     
     def discard_hand(self):
         for card in self.hand:
@@ -94,27 +136,34 @@ class game:
         self.events = events
         self.event_idx = 0
     
-    def add_event(self, user, target, damage=0, armor=0):
-        created_event = event(idx=len(self.events), user=user, target=target, damage=damage, armor=armor)
-        self.events.append(created_event)
-        print(f"Event added: {created_event}")
-    
     def resolve_events(self):
         for event in self.events[self.event_idx:]:
-            if event.resolve():
-                print(f"Event {event.idx} resolved.")
-            else:
-                print(f"Event {event.idx} failed to resolve.")
+            event.resolve()
         self.event_idx = len(self.events)
     
     def play_round(self):
         self.player.start_turn()
-        self.player.end_turn()
         self.resolve_events()
-        self.enemy.take_action(self.player)
-        self.resolve_events()
-        print(f"Round played. {self.player.name} has {self.player.health} health left.")
-        print(f"{self.enemy.name} has {self.enemy.health} health left.")
+        if self.check_alive():
+            self.enemy.take_turn(self.player)
+            self.resolve_events()
+            if self.check_alive():
+                print(f"Round played. {self.player.name} has {self.player.health} health left.")
+                print(f"{self.enemy.name} has {self.enemy.health} health left.")
+            else:
+                pass
+        else:
+            pass
+
+
+    def check_alive(self):
+        if self.player.health <= 0:
+            print(f"{self.player.name} has been defeated.")
+            return False
+        elif self.enemy.health <= 0:
+            print(f"{self.enemy.name} has been defeated.")
+            return False
+        return True
     
     def add_player(self, player):
         self.player = player
@@ -125,8 +174,24 @@ class game:
         print(f"Enemy {enemy.name} added to the game.")
 
 class event:
-    def __init__(self, idx, user, target, damage=0, armor=0):
-        self.idx = idx
+    def __init__(self, type):
+        self.type = type
+
+    def add_to_game(self, game):
+        game.events.append(self)
+
+class player_action(event):
+    def __init__(self, card):
+        super().__init__("Player_Action")
+        self.card = card
+    
+    def resolve(self):
+        self.card.play()
+        return True
+
+class enemy_action(event):
+    def __init__(self, user, target, damage=0, armor=0):
+        super().__init__("Enemy_Action")
         self.user = user
         self.target = target
         self.damage = damage
@@ -138,10 +203,9 @@ class event:
             self.target.health -= damage
             print(f"{self.user.name} dealt {self.damage} damage to {self.target.name}.")
         if self.armor > 0:
-            self.user.armor += self.armor
+            self.target.armor += self.armor
             print(f"{self.user.name} gained {self.armor} armor.")
         return True
-
 
 class enemy:
     def __init__(self, name, game, health=30, damage=10, action_weights={"attack": 0.5, "defend": 0.3, "do_nothing": 0.2}, ):
@@ -153,15 +217,18 @@ class enemy:
         self.action_weights = action_weights
 
     def attack(self, player):
-        self.game.add_event(self, player, damage=self.damage)
+        attack = enemy_action(self, player, damage=self.damage)
+        attack.add_to_game(self.game)
     
     def defend(self, player):
-        self.game.add_event(self, self, armor=1)
+        defend = enemy_action(self, self, armor=1)
+        defend.add_to_game(self.game)
     
     def do_nothing(self, player):
-        self.game.add_event(self, self)
+        nothing = enemy_action(self, self)
+        nothing.add_to_game(self.game)
         
-    def take_action(self, player):
+    def take_turn(self, player):
         action = random()
         cumulative_weight = 0
         for action_name, weight in self.action_weights.items():
@@ -183,13 +250,24 @@ if __name__ == "__main__":
     
 
     # Create cards
-    card1 = card(1, "Fireball", cost=2, damage=5)
-    card2 = card(2, "Shield", cost=1, armor=3)
+    card1 = card(1, "Fireball", 1)
+    fireball1 = effect(player1, enemy1, "damage", 5)
+    card1.add_effect(fireball1)
+    card2 = card(2, "Shield", 1)
+    shield1 = effect(player1, player1, "armor", 2)
+    card2.add_effect(shield1)
+    card3 = card(3, "Heal", 2)
+    heal1 = effect(player1, player1, "heal", 7)
+    card3.add_effect(heal1)
+    for i in range(len(card1.effects)):
+        print(f"Card {card1.name} effect {i}: {card1.effects[i]}")
 
     # Add cards to player's deck
     for _ in range(7):
         player1.add_card_to_deck(card1)
     for _ in range(3):
         player1.add_card_to_deck(card2)
+    for _ in range(2):
+        player1.add_card_to_deck(card3)
     player1.shuffle_deck()
     game_instance.play_round()
