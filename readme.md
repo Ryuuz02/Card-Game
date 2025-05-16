@@ -1,0 +1,1 @@
+Probably easier to make a new player rather than try to continually deepcopy and take parts of the previous one.

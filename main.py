@@ -1,4 +1,5 @@
 from random import shuffle, random
+from copy import deepcopy
 
 class card:
     def __init__(self, id, name, cost=0, effects=None):
@@ -18,18 +19,25 @@ class card:
     def add_effect(self, effect):
         self.effects.append(effect)
     
-    def play(self):
+    def activate(self):
         for effect in self.effects:
             effect.apply()
+        
+    def play(self, game):
+        played_card = player_action(self)
+        print(played_card.add_to_game(game))
+        print(game.events)
 
 class effect:
-    def __init__(self, user, target, effect_type, value):
+    def __init__(self, user, target, effect_type, value, card_target=None, ):
         self.user = user
         self.target = target
         self.effect_type = effect_type
         self.value = value
+        self.card_target = card_target
     
     def apply(self):
+        print(self.target)
         if self.effect_type == "damage":
             damage = max(0, self.value - self.target.armor)
             self.target.health -= damage
@@ -37,6 +45,8 @@ class effect:
             self.target.armor += self.value
         elif self.effect_type == "heal":
             self.target.health += self.value
+        elif self.effect_type == "enhance":
+            self.card_target.add_effect(effect(self.user, self.target, "damage", self.value))
         
     def __str__(self):
         return f"{self.effect_type} {self.value} to {self.target.name}"
@@ -64,7 +74,7 @@ class player:
 
     def shuffle_discard_into_deck(self):
         if self.discard_pile:
-            self.discard_pile = shuffle(self.discard_pile)
+            shuffle(self.discard_pile)
             self.deck.extend(self.discard_pile)
             self.discard_pile.clear()
             print(f"{self.name} shuffled discard pile into deck.")
@@ -79,7 +89,8 @@ class player:
         if card in self.hand:
             self.hand.remove(card)
             self.energy -= card.cost
-            card.play()
+            card.play(self.game)
+            self.discard_pile.append(card)
             print(f"{self.name} played {card}.")
         else:
             print(f"{self.name} does not have {card} in hand.")
@@ -96,7 +107,9 @@ class player:
             for i in range(len(self.hand)):
                 card = self.hand[i]
                 print(str(i + 1) + ": " + str(card))
-            choice = int(input("Type the number of the card you want to play, or 0 to end the turn ")) - 1
+            choice = -2
+            while choice not in range(-1, len(self.hand) + 1):
+                choice = int(input("Type the number of the card you want to play, or 0 to end the turn ")) - 1
             if choice == -1:
                 break
             chosen_card = self.hand[choice]
@@ -106,7 +119,7 @@ class player:
             else:
                 self.play_card(chosen_card)
                 print(f"{self.name} played {chosen_card}.")
-        self.end_turn
+        self.end_turn()
 
     def end_turn(self):
         self.discard_hand()
@@ -128,6 +141,12 @@ class player:
     
     def __str__(self):
         return self.name
+    
+    def __eq__(self, value):
+        if isinstance(value, player):
+            return self.name == value.name
+        return False
+
 
 class game:
     def __init__(self, player=None, enemy=None, events=[]):
@@ -136,17 +155,34 @@ class game:
         self.events = events
         self.event_idx = 0
     
-    def resolve_events(self):
+    def resolve_all_events(self):
+        hand_copy = self.player.hand.copy()
+        deck_copy = self.player.deck.copy()
+        discard_copy = self.player.discard_pile.copy()
+        self.player = deepcopy(self.player_copy)
+        self.enemy = deepcopy(self.enemy_copy)
+        self.player.game = self
+        self.enemy.game = self
+        self.player.deck = deck_copy
+        self.player.hand = hand_copy
+        self.player.discard_pile = discard_copy
+        self.update_targets()
+        print(self.events)
+        for event in self.events:
+            event.resolve()
+        self.event_idx = len(self.events)
+    
+    def resolve_events_from_idx(self):
         for event in self.events[self.event_idx:]:
             event.resolve()
         self.event_idx = len(self.events)
     
     def play_round(self):
         self.player.start_turn()
-        self.resolve_events()
+        self.resolve_all_events()
         if self.check_alive():
             self.enemy.take_turn(self.player)
-            self.resolve_events()
+            self.resolve_all_events()
             if self.check_alive():
                 print(f"Round played. {self.player.name} has {self.player.health} health left.")
                 print(f"{self.enemy.name} has {self.enemy.health} health left.")
@@ -154,7 +190,17 @@ class game:
                 pass
         else:
             pass
-
+    
+    def update_targets(self):
+        for event in self.events:
+            if isinstance(event, player_action):
+                for effect in event.card.effects:
+                    if effect.target == self.enemy:
+                        effect.target = self.enemy
+                    elif effect.target == self.player:
+                        effect.target = self.player
+            elif isinstance(event, enemy_action):
+                event.target = self.player
 
     def check_alive(self):
         if self.player.health <= 0:
@@ -172,6 +218,13 @@ class game:
     def add_enemy(self, enemy):
         self.enemy = enemy
         print(f"Enemy {enemy.name} added to the game.")
+    
+    def play_fight(self):
+        self.player_copy = deepcopy(self.player)
+        self.enemy_copy = deepcopy(self.enemy)
+        while self.check_alive():
+            self.play_round()
+        print("Game Over")
 
 class event:
     def __init__(self, type):
@@ -179,6 +232,7 @@ class event:
 
     def add_to_game(self, game):
         game.events.append(self)
+        return True
 
 class player_action(event):
     def __init__(self, card):
@@ -186,7 +240,7 @@ class player_action(event):
         self.card = card
     
     def resolve(self):
-        self.card.play()
+        self.card.activate()
         return True
 
 class enemy_action(event):
@@ -239,6 +293,11 @@ class enemy:
     
     def __str__(self):
         return self.name
+    
+    def __eq__(self, value):
+        if isinstance(value, enemy):
+            return self.name == value.name
+        return False
 
 if __name__ == "__main__":
     # Create player and enemy
@@ -259,8 +318,9 @@ if __name__ == "__main__":
     card3 = card(3, "Heal", 2)
     heal1 = effect(player1, player1, "heal", 7)
     card3.add_effect(heal1)
-    for i in range(len(card1.effects)):
-        print(f"Card {card1.name} effect {i}: {card1.effects[i]}")
+    card4 = card(4, "Enhance", 1)
+    enhance1 = effect(player1, enemy1, "enhance", 3, card_target=card1)
+    card4.add_effect(enhance1)
 
     # Add cards to player's deck
     for _ in range(7):
@@ -269,5 +329,8 @@ if __name__ == "__main__":
         player1.add_card_to_deck(card2)
     for _ in range(2):
         player1.add_card_to_deck(card3)
+    for _ in range(1):
+        player1.add_card_to_deck(card4)
+
     player1.shuffle_deck()
-    game_instance.play_round()
+    game_instance.play_fight()
